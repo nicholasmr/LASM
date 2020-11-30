@@ -28,7 +28,7 @@ ax3.hist(df['perimeter'], bins=bins, color='#33a02c')
 ax3.set_xlabel('Perimeter [px]')
 
 ax6.hist(df['orientation'], bins=bins, color='#b15928')
-ax6.set_xlabel('Orientation [deg.]')
+ax6.set_xlabel('Orientation [deg. btw. y- and major-axis]')
 
 plt.tight_layout()
 plt.savefig(fname[:-4]+'_grainstats.png')

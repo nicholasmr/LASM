@@ -14,9 +14,13 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget, QSizePolicy, QLabel, QLineEdi
 
 import cv2
 from scipy import ndimage
+
+import skimage
+if float(skimage.__version__[0:4]) < 0.16: exit('Please install "skimage" version 0.16 or higher.')
 from skimage import morphology
 from skimage.segmentation import clear_border
 from skimage import measure, color #, io
+
 #from scipy import ndimage as nd
 from scipy.ndimage import generate_binary_structure
 
@@ -296,7 +300,7 @@ class TileView(QWidget):
         self.fig_area = PlotCanvas(plottype='hist', histcolor='0.4', title='Area [px^2]')
         self.fig_edia = PlotCanvas(plottype='hist', histcolor='0.0', title='Equivalent diameter [px]')
         self.fig_ecce = PlotCanvas(plottype='hist', histcolor='#6a3d9a', title='Eccentricity')
-        self.fig_orie = PlotCanvas(plottype='hist', histcolor='#b15928', title='Orientation [deg. btw. x- and major-axis]')
+        self.fig_orie = PlotCanvas(plottype='hist', histcolor='#b15928', title='Orientation [deg. btw. y- and major-axis]')
         self.fig_peri = PlotCanvas(plottype='hist', histcolor='#33a02c', title='Perimeter [px]')
         self.fig_maax = PlotCanvas(plottype='hist', histcolor='#1f78b4', title='Major axis [px]')
         
@@ -422,7 +426,8 @@ class TileView(QWidget):
 
         #--------------------
 
-        self.clusters = measure.regionprops(labeled_mask, self.tile, coordinates='xy')
+        #self.clusters = measure.regionprops(labeled_mask, self.tile, coordinates='xy')
+        self.clusters = measure.regionprops(labeled_mask, self.tile) # assumes rc-coords in skimage>=0.16
         getGrainsProp = lambda prop: np.array([ cluster_props[prop] for cluster_props in self.clusters])
         
         self.gnum = getGrainsProp('label')
@@ -483,7 +488,7 @@ class TileView(QWidget):
         ax.clear()
 
         ax.imshow(self.tile_lbld)
-        plot_ellipses(ax,self.cent,self.orie/self.rad2deg,self.maax,self.miax, cmid='w', cma='0.8', cmi='0.4') 
+        plot_ellipses(ax,self.cent,self.orie/self.rad2deg,self.maax,self.miax, cmid='w', cma='0.4', cmi='0.8') 
         plt.savefig(fname_prc)
         ax.clear()
         
@@ -546,14 +551,14 @@ def plot_ellipses(ax, centriods, orientations, majoraxes, minoraxes, cma='#e31a1
     for ii in np.arange(len(centriods)):        
         y0, x0 = centriods[ii]
         ori = orientations[ii]
-        minor_axis_length = majoraxes[ii] # reversed axis in demo https://scikit-image.org/docs/stable/auto_examples/segmentation/plot_regionprops.html#sphx-glr-auto-examples-segmentation-plot-regionprops-py
-        major_axis_length = minoraxes[ii]
+        minor_axis_length = minoraxes[ii] # https://scikit-image.org/docs/stable/auto_examples/segmentation/plot_regionprops.html#sphx-glr-auto-examples-segmentation-plot-regionprops-py
+        major_axis_length = majoraxes[ii]
         x1 = x0 + np.cos(ori) * 0.5 * minor_axis_length
         y1 = y0 - np.sin(ori) * 0.5 * minor_axis_length
         x2 = x0 - np.sin(ori) * 0.5 * major_axis_length
         y2 = y0 - np.cos(ori) * 0.5 * major_axis_length
-        ax.plot((x0, x1), (y0, y1), '-', color=cma, linewidth=2.0)
-        ax.plot((x0, x2), (y0, y2), '-', color=cmi, linewidth=2.0)
+        ax.plot((x0, x1), (y0, y1), '-', color=cmi, linewidth=2.0)
+        ax.plot((x0, x2), (y0, y2), '-', color=cma, linewidth=2.0)
         ax.plot(x0, y0, '.', color=cmid, markersize=8)
     
 ###############################################################################
