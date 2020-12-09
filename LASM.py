@@ -3,6 +3,8 @@
 
 import sys, os, copy, glob
 import pandas as pd
+import configparser
+from datetime import datetime
 import code # code.interact(local=locals())
 
 import numpy as np
@@ -48,13 +50,12 @@ class OverView(QWidget):
         self.tileres = 2000 # Tile max resolution (x or y). If this is too large, processing on laptops is not possible.
         
         self.grid = QGridLayout()
-        self.grid.setSpacing(20)
+        self.grid.setSpacing(10)
         btnwidth = 320
         ROWNUM = 0
         
         self.btn_open = QPushButton("Browse")
         self.btn_open.clicked.connect(self.open_img)
-        self.btn_open.clicked.connect(self.set_tiles)
         self.btn_open.setMinimumWidth(btnwidth)
         self.btn_open.setMaximumWidth(btnwidth)
         self.grid.addWidget(self.btn_open, ROWNUM,0)
@@ -92,25 +93,22 @@ class OverView(QWidget):
         self.grid.addWidget(self.btn_proc, ROWNUM, 0)
         
         ROWNUM+=1
-        self.btn_comb = QPushButton("Combine csv files")
-        self.btn_comb.clicked.connect(lambda: self.combine_csv_tiles())
-        self.btn_comb.setMinimumWidth(btnwidth)
-        self.btn_comb.setMaximumWidth(btnwidth)
-        self.grid.addWidget(self.btn_comb, ROWNUM, 0)      
-        
-        ROWNUM+=1
         self.lbl_fopen = QLabel("Image: none")
         self.grid.addWidget(self.lbl_fopen,ROWNUM,0, Qt.AlignLeft)
+        
+        ROWNUM+=1
+        self.lbl_status = QLabel("")
+        self.lbl_status.setMinimumWidth(btnwidth)
+        self.grid.addWidget(self.lbl_status,ROWNUM,0, Qt.AlignLeft)
         
         #ROWNUM+=1
         helpstr = """Help:\n--------
   1) Open image (browse) 
-  2) Set tile size (<5000px is safe)
+  2) Set tile size (<5000px is recommended)
   3) Select calibration tile below
   4) Pick calibration settings in 'tile viewer'
   5) Shift+click tiles to skip them
-  6) Process tiles
-  7) Combine all csv tile files"""
+  6) Process tiles"""
         self.lbl_howto = QLabel(helpstr)
         self.grid.addWidget(self.lbl_howto, 0, 1, ROWNUM, 1, Qt.AlignLeft)
 
@@ -151,7 +149,11 @@ class OverView(QWidget):
             print('Loaded %s'%(self.filename))
             self.dumppath = self.filename[:-4] + '_tiles'
             self.fcombcsv = self.filename[:-4] + '.csv'
+            self.fsettings = self.filename[:-4] + '.ini'
+            
             if not os.path.exists(self.dumppath): os.mkdir(self.dumppath)
+            self.config_load()
+            self.set_tiles()
             
     def set_tiles(self):
         nx = np.shape(self.img)[0]
@@ -172,19 +174,26 @@ class OverView(QWidget):
         
     def process_tiles(self):
         print('Processing all tiles...')
+        self.lbl_status.setText("Processing tiles...")
+        self.lbl_status.setStyleSheet("QLabel {font-weight: bold; color: orange;}");
         for iy in np.arange(self.Ny):
             for ix in np.arange(self.Nx):
                 if (ix,iy) in self.tiles.skiplist:
-                    print('Skipping %i,%i'%(ix,iy))
+                    print('%i %i (skipped)'%(ix,iy))
                     continue
-                print(ix,iy)
+                print('%i %i'%(ix,iy))
                 self.tiles.labelsgrid[iy,ix].mousePressEvent(0)
                 self.tiles.repaint()
                 self.tileview.find_grains()
                 self.tileview.repaint()
-                self.tileview.save_csv()
+                self.tileview.save_csv(tiley0=ix*self.dx, tilex0=iy*self.dy)
                 self.tileview.save_imgs()
                 
+        self.combine_csv_tiles()
+        self.plot_summary()
+        self.config_save()
+        self.lbl_status.setText('Finished: output is "%s"'%(self.fcombcsv))
+        self.lbl_status.setStyleSheet("QLabel {font-weight: bold; color: green;}");
                 
     def combine_csv_tiles(self):
         files = [i for i in glob.glob('%s/*.csv'%(self.dumppath))]
@@ -193,7 +202,61 @@ class OverView(QWidget):
                 
     def set_tileres(self, res):
         self.tileres = res
+
+    def config_save(self):
         
+        config = configparser.ConfigParser()
+        config['settings'] = {
+                'clahe':    self.tileview.slider_cntr.value(), \
+                'ssfilter': self.tileview.slider_segm.value(), \
+                'tileres':  int(self.inp_tileres.text()), \
+                'timestamp': datetime.now() \
+                }
+        with open(self.fsettings, 'w') as configfile: config.write(configfile)
+
+    def config_load(self):
+        
+        if os.path.isfile(self.fsettings):
+            config = configparser.ConfigParser()
+            config.read(self.fsettings)        
+            self.tileview.slider_cntr.setValue(int(config['settings']['clahe']))
+            self.tileview.slider_segm.setValue(int(config['settings']['ssfilter']))
+            self.inp_tileres.setText(str(config['settings']['tileres']))
+            self.set_tileres(int(config['settings']['tileres']))
+            print('Loaded saved config')
+    
+    def plot_summary(self):
+        
+        fname = self.fcombcsv
+        df = pd.read_csv(fname, sep=',')
+        
+        f, ((ax1, ax2, ax3), (ax4, ax5, ax6)) = plt.subplots(2, 3, figsize=(12,7))
+        f.suptitle(fname + ' (%i grains)'%(len(df['grain_number'])))
+        bins = 40
+        
+        ax1.hist(df['equivalent_diameter'], bins=bins, color='k')
+        ax1.set_xlabel('Equiv. diameter [px]')
+        
+        ax2.hist(df['area'], bins=bins, color='0.4')
+        ax2.set_xlabel('Area [px^2]')
+        
+        ax4.hist(df['major_axis_length'], bins=bins, color='#1f78b4')
+        ax4.set_xlabel('Major axis [px]')
+        
+        ax5.hist(df['eccentricity'], bins=bins, color='#6a3d9a')
+        ax5.set_xlabel('Eccentricity')
+        
+        ax3.hist(df['perimeter'], bins=bins, color='#33a02c')
+        ax3.set_xlabel('Perimeter [px]')
+        
+        ax6.hist(df['orientation'], bins=bins, color='#b15928')
+        ax6.set_xlabel('Orientation [deg. btw. y- and major-axis]')
+        
+        plt.tight_layout()
+        plt.savefig(fname[:-4]+'_grainstats.png')
+        
+        plt.close(f)
+    
 ###############################################################################
 ###############################################################################
         
@@ -369,7 +432,7 @@ class TileView(QWidget):
         self.btn_findgrains.setMinimumWidth(objwidth)
         self.btn_findgrains.setMaximumWidth(objwidth)
         grid.addWidget(self.btn_findgrains, 2, 2, Qt.AlignCenter)
-        self.btn_savegrains = QPushButton("Save grains to .csv")
+        self.btn_savegrains = QPushButton("Save tile grains to .csv")
         self.btn_savegrains.clicked.connect(lambda: self.save_csv())
         self.btn_savegrains.setMinimumWidth(objwidth)
         self.btn_savegrains.setMaximumWidth(objwidth)
@@ -449,11 +512,13 @@ class TileView(QWidget):
         
         self.fig_segm.plotellipses(self.cent,self.orie/self.rad2deg,self.maax,self.miax)
         
-    def save_csv(self):
+    def save_csv(self, tilex0=0, tiley0=0):
         
         fname = self.parent.dumppath + '/%i_%i.csv'%(self.tile_ij[0],self.tile_ij[1])
         
         propList = {'gnum':'grain_number', \
+                    'cntx':'centroid_x', \
+                    'cnty':'centroid_y', \
                     'edia':'equivalent_diameter', \
                     'area':'area', \
                     'ecce':'eccentricity', \
@@ -467,7 +532,11 @@ class TileView(QWidget):
         
         for ii,gnumii in enumerate(self.gnum):
             for propkey in propList.keys():
-                output_file.write(',' + str(getattr(self,propkey)[ii]))
+                fieldstr = ''
+                if   propkey == 'cntx':    fieldstr = str(self.cent[ii][1] + tilex0);
+                elif propkey == 'cnty':    fieldstr = str(self.cent[ii][0] + tiley0);
+                else:                       fieldstr = str(getattr(self,propkey)[ii]);
+                output_file.write(',' + fieldstr)
             output_file.write('\n')
             
         output_file.close() 
