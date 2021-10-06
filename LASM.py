@@ -1,4 +1,4 @@
-# Nicholas M. Rathmann, NBI, UCPH, 2020.
+# Nicholas M. Rathmann, NBI, UCPH, 2020-2021
 # Sponsered by Villum Fonden as part of the project "IceFlow".
 
 import sys, os, copy, glob
@@ -41,7 +41,8 @@ class OverView(QWidget):
         super().__init__()
         self.initUI()
         #self.open_img(blankimg=True)
-        self.tileview = TileView(self)
+        self.tileview = TileView(self, TYPE=T_TILEVIEW_GRAINS) 
+        self.tileview_bubbles = TileView(self, TYPE=T_TILEVIEW_BUBBLES) 
         self.raise_()
         self.activateWindow()
 
@@ -148,7 +149,8 @@ class OverView(QWidget):
             self.img = cv2.imread(self.filename, 0)
             print('Loaded %s'%(self.filename))
             self.dumppath = self.filename[:-4] + '_tiles'
-            self.fcombcsv = self.filename[:-4] + '.csv'
+            self.fcombcsv_grains  = self.filename[:-4] + '_grains'  + '.csv'
+            self.fcombcsv_bubbles = self.filename[:-4] + '_bubbles' + '.csv'
             self.fsettings = self.filename[:-4] + '.ini'
             
             if not os.path.exists(self.dumppath): os.mkdir(self.dumppath)
@@ -167,7 +169,7 @@ class OverView(QWidget):
         
         self.grid.removeWidget(self.tiles)
         self.tiles.deleteLater()
-        self.tiles = MyTilesWidget(self.Nx,self.Ny, self.dx,self.dy, self.img, self.tileview)
+        self.tiles = MyTilesWidget(self.Nx,self.Ny, self.dx,self.dy, self.img, self.tileview, self.tileview_bubbles)
         self.grid.addWidget(self.tiles, self.ROWTILESGRID, 0, 1, 2)
         self.grid.update()
         
@@ -184,21 +186,31 @@ class OverView(QWidget):
                 print('%i %i'%(ix,iy))
                 self.tiles.labelsgrid[iy,ix].mousePressEvent(0)
                 self.tiles.repaint()
+                #
                 self.tileview.find_grains()
                 self.tileview.repaint()
                 self.tileview.save_csv(tiley0=ix*self.dx, tilex0=iy*self.dy)
-                self.tileview.save_imgs()
+                self.tileview.save_img_raw()
+                self.tileview.save_img()
+                #
+                self.tileview_bubbles.find_grains()
+                self.tileview_bubbles.repaint()
+                self.tileview_bubbles.save_csv(tiley0=ix*self.dx, tilex0=iy*self.dy)
+                self.tileview_bubbles.save_img()
                 
-        self.combine_csv_tiles()
+        self.combine_csv_tiles(T_TILEVIEW_GRAINS)
+        self.combine_csv_tiles(T_TILEVIEW_BUBBLES)
         self.plot_summary()
         self.config_save()
-        self.lbl_status.setText('Finished: output is "%s"'%(self.fcombcsv))
+        self.lbl_status.setText('Finished: output is "%s"'%(self.fcombcsv_grains))
         self.lbl_status.setStyleSheet("QLabel {font-weight: bold; color: green;}");
                 
-    def combine_csv_tiles(self):
-        files = [i for i in glob.glob('%s/*.csv'%(self.dumppath))]
+    def combine_csv_tiles(self, TYPE):
+        files = [i for i in glob.glob('%s/*_%s.csv'%(self.dumppath, 'grains' if TYPE==T_TILEVIEW_GRAINS else 'bubbles'))]
         combined_csv = pd.concat([pd.read_csv(f) for f in files])
-        combined_csv.to_csv(self.fcombcsv, index=False, encoding='utf-8-sig')
+        fcomb = self.fcombcsv_grains if TYPE==T_TILEVIEW_GRAINS else self.fcombcsv_bubbles
+        combined_csv.to_csv(fcomb, index=False, encoding='utf-8-sig')
+        print('Saved %s'%(fcomb))
                 
     def set_tileres(self, res):
         self.tileres = res
@@ -209,10 +221,13 @@ class OverView(QWidget):
         config['settings'] = {
                 'clahe':    self.tileview.slider_cntr.value(), \
                 'ssfilter': self.tileview.slider_segm.value(), \
-                'tileres':  int(self.inp_tileres.text()), \
+                'clahebubbles': self.tileview_bubbles.slider_cntr.value(), \
+                'cvopening':    self.tileview_bubbles.slider_segm.value(), \
+                'tileres':   int(self.inp_tileres.text()), \
                 'timestamp': datetime.now() \
                 }
         with open(self.fsettings, 'w') as configfile: config.write(configfile)
+        print('Saved config %s'%(self.fsettings))
 
     def config_load(self):
         
@@ -221,50 +236,55 @@ class OverView(QWidget):
             config.read(self.fsettings)        
             self.tileview.slider_cntr.setValue(int(config['settings']['clahe']))
             self.tileview.slider_segm.setValue(int(config['settings']['ssfilter']))
+            self.tileview_bubbles.slider_cntr.setValue(int(config['settings']['clahebubbles']))
+            self.tileview_bubbles.slider_segm.setValue(int(config['settings']['cvopening']))
             self.inp_tileres.setText(str(config['settings']['tileres']))
             self.set_tileres(int(config['settings']['tileres']))
-            print('Loaded saved config')
+            print('Loaded config %s'%(self.fsettings))
     
     def plot_summary(self):
         
-        fname = self.fcombcsv
-        df = pd.read_csv(fname, sep=',')
+        for TYPE in [T_TILEVIEW_GRAINS, T_TILEVIEW_BUBBLES]:
         
-        f, ((ax1, ax2, ax3), (ax4, ax5, ax6)) = plt.subplots(2, 3, figsize=(12,7))
-        f.suptitle(fname + ' (%i grains)'%(len(df['grain_number'])))
-        bins = 40
-        
-        ax1.hist(df['equivalent_diameter'], bins=bins, color='k')
-        ax1.set_xlabel('Equiv. diameter [px]')
-        
-        ax2.hist(df['area'], bins=bins, color='0.4')
-        ax2.set_xlabel('Area [px^2]')
-        
-        ax4.hist(df['major_axis_length'], bins=bins, color='#1f78b4')
-        ax4.set_xlabel('Major axis [px]')
-        
-        ax5.hist(df['eccentricity'], bins=bins, color='#6a3d9a')
-        ax5.set_xlabel('Eccentricity')
-        
-        ax3.hist(df['perimeter'], bins=bins, color='#33a02c')
-        ax3.set_xlabel('Perimeter [px]')
-        
-        ax6.hist(df['orientation'], bins=bins, color='#b15928')
-        ax6.set_xlabel('Orientation [deg. btw. y- and major-axis]')
-        
-        plt.tight_layout()
-        plt.savefig(fname[:-4]+'_grainstats.png')
-        
-        plt.close(f)
+            fname = self.fcombcsv_grains if TYPE==T_TILEVIEW_GRAINS else self.fcombcsv_bubbles
+            df = pd.read_csv(fname, sep=',')
+            
+            f, ((ax1, ax2, ax3), (ax4, ax5, ax6)) = plt.subplots(2, 3, figsize=(12,7))
+            f.suptitle(fname + ' (%i %s)'%(len(df['grain_number']), 'grains' if TYPE==T_TILEVIEW_GRAINS else 'bubbles') )
+            bins = 40
+            
+            ax1.hist(df['equivalent_diameter'], bins=bins, color='k')
+            ax1.set_xlabel('Equiv. diameter [px]')
+            
+            ax2.hist(df['area'], bins=bins, color='0.4')
+            ax2.set_xlabel('Area [px^2]')
+            
+            ax4.hist(df['major_axis_length'], bins=bins, color='#1f78b4')
+            ax4.set_xlabel('Major axis [px]')
+            
+            ax5.hist(df['eccentricity'], bins=bins, color='#6a3d9a')
+            ax5.set_xlabel('Eccentricity')
+            
+            ax3.hist(df['perimeter'], bins=bins, color='#33a02c')
+            ax3.set_xlabel('Perimeter [px]')
+            
+            ax6.hist(df['orientation'], bins=bins, color='#b15928')
+            ax6.set_xlabel('Orientation [deg. btw. y- and major-axis]')
+            
+            plt.tight_layout()
+            plt.savefig(fname[:-4]+'_stats.png')
+            
+            plt.close(f)
     
 ###############################################################################
 ###############################################################################
         
 class MyTilesWidget(QWidget):
 
-    def __init__(self, Nx,Ny, dx,dy, img, tileview):
+    def __init__(self, Nx,Ny, dx,dy, img, tileview, tileview_bubbles):
         super().__init__()
         self.tileview = tileview
+        self.tileview_bubbles = tileview_bubbles
         self.imgxmax, self.imgymax = 1000, 800# Resolution for the gridded tiles view. If too large, low res monitors can't show the full image.
         self.xscale = self.imgxmax/Nx
         self.yscale = self.imgymax/Ny
@@ -337,18 +357,24 @@ class ClickableLabel(QLabel):
             img[img < 255-brt] += brt  
             self.setbg(img)
             self.parent.tileview.set_tile(self.frame, self.tile_ij)
+            self.parent.tileview_bubbles.set_tile(self.frame, self.tile_ij)
             if (self.parent.childInFocus is not None) and (self.parent.childInFocus is not self): self.parent.childInFocus.setbg(self.parent.childInFocus.frame)        
             self.parent.childInFocus = self
         
 ###############################################################################
 ###############################################################################
         
+T_TILEVIEW_GRAINS  = 1
+T_TILEVIEW_BUBBLES = 2
+        
 class TileView(QWidget):
 
-    def __init__(self, parent):
+    def __init__(self, parent, TYPE=T_TILEVIEW_GRAINS):
         super().__init__()
         self.parent = parent
         self.rad2deg = 57.2958
+        self.type = TYPE
+        self.typestr = 'grains' if self.type==T_TILEVIEW_GRAINS else 'bubbles'
         self.initUI()
 
     def initUI(self):
@@ -384,14 +410,14 @@ class TileView(QWidget):
         txt_cntr_title.setFont(myBold)
         grid.addWidget(txt_cntr_title, 0, 0, Qt.AlignCenter)
         self.slider_cntr = QSlider(Qt.Horizontal, self)
-        self.slider_cntr.setMinimum(1)
+        self.slider_cntr.setMinimum(0)
         self.slider_cntr.setMaximum(21)
-        self.slider_cntr.setValue(9)
+        self.slider_cntr.setValue(9 if self.type==T_TILEVIEW_GRAINS else 0)
         self.slider_cntr.setTickPosition(QSlider.TicksBelow)
         self.slider_cntr.setTickInterval(1)
         self.slider_cntr.setSingleStep(1)
         self.slider_cntr.setTracking(False)
-        self.slider_cntr.valueChanged[int].connect(lambda: txt_cntr.setText('CLAHE contrast limit: %+i'%(self.slider_cntr.value()-1)))
+        self.slider_cntr.valueChanged[int].connect(lambda: txt_cntr.setText('CLAHE clip limit: %+i'%(self.slider_cntr.value())))
         self.slider_cntr.valueChanged[int].connect(self.update_cntr)
         self.slider_cntr.valueChanged[int].connect(lambda: self.fig_cntr.plot(self.tile_cntr))
         self.slider_cntr.valueChanged[int].connect(lambda: self.update_segm(self.slider_segm.value()))
@@ -399,7 +425,7 @@ class TileView(QWidget):
         self.slider_cntr.setMinimumWidth(objwidth)
         self.slider_cntr.setMaximumWidth(objwidth)
         grid.addWidget(self.slider_cntr, 3, 0, Qt.AlignLeft)
-        txt_cntr = QLabel('CLAHE contrast limit: %i'%(self.slider_cntr.value()-1))
+        txt_cntr = QLabel('CLAHE contrast limit: %i'%(self.slider_cntr.value()))
         grid.addWidget(txt_cntr, 2, 0, Qt.AlignLeft)
         grid.addWidget(self.fig_cntr, 1, 0)
         
@@ -407,32 +433,51 @@ class TileView(QWidget):
         txt_segm_title.setFont(myBold)
         grid.addWidget(txt_segm_title, 0, 1, Qt.AlignCenter)
         self.slider_segm = QSlider(Qt.Horizontal, self)
-        self.slider_segm.setMinimum(0)
-        self.slider_segm.setMaximum(400)
-        self.slider_segm.setValue(150)
-        self.slider_segm.setTickPosition(QSlider.TicksBelow)
-        self.slider_segm.setTickInterval(20)
-        self.slider_segm.setSingleStep(20)
-        self.slider_segm.setTracking(False)
-        self.slider_segm.valueChanged[int].connect(lambda: txt_segm.setText('Filter small-scale structure <= %i px'%(self.slider_segm.value())))
-        self.slider_segm.valueChanged[int].connect(self.update_segm)
-        self.slider_segm.valueChanged[int].connect(lambda: self.fig_segm.plot(self.tile_segm))
-        self.slider_segm.setMinimumWidth(objwidth)
-        self.slider_segm.setMaximumWidth(objwidth)
-        grid.addWidget(self.slider_segm, 3, 1, Qt.AlignLeft)
-        txt_segm = QLabel('Filter small-scale structure <= %i px'%(self.slider_segm.value()))
+        ##
+        if self.type == T_TILEVIEW_GRAINS:
+            self.slider_segm.setMinimum(0)
+            self.slider_segm.setMaximum(400)
+            self.slider_segm.setValue(150)
+            self.slider_segm.setTickPosition(QSlider.TicksBelow)
+            self.slider_segm.setTickInterval(20)
+            self.slider_segm.setSingleStep(20)
+            self.slider_segm.setTracking(False)
+            self.slider_segm.valueChanged[int].connect(lambda: txt_segm.setText('Filter small-scale structure <= %i px'%(self.slider_segm.value())))
+            self.slider_segm.valueChanged[int].connect(self.update_segm)
+            self.slider_segm.valueChanged[int].connect(lambda: self.fig_segm.plot(self.tile_segm))
+            self.slider_segm.setMinimumWidth(objwidth)
+            self.slider_segm.setMaximumWidth(objwidth)
+            grid.addWidget(self.slider_segm, 3, 1, Qt.AlignLeft)
+            txt_segm = QLabel('Filter small-scale structure <= %i px'%(self.slider_segm.value()))
+        ##
+        if self.type == T_TILEVIEW_BUBBLES:
+            self.slider_segm.setMinimum(0)
+            self.slider_segm.setMaximum(10)
+            self.slider_segm.setValue(2)
+            self.slider_segm.setTickPosition(QSlider.TicksBelow)
+            self.slider_segm.setTickInterval(1)
+            self.slider_segm.setSingleStep(1)
+            self.slider_segm.setTracking(False)
+            self.slider_segm.valueChanged[int].connect(lambda: txt_segm.setText('Number of erosions and dilations: %s'%(self.slider_segm.value())))
+            self.slider_segm.valueChanged[int].connect(self.update_segm)
+            self.slider_segm.valueChanged[int].connect(lambda: self.fig_segm.plot(self.tile_segm))
+            self.slider_segm.setMinimumWidth(objwidth)
+            self.slider_segm.setMaximumWidth(objwidth)
+            grid.addWidget(self.slider_segm, 3, 1, Qt.AlignLeft)
+            txt_segm = QLabel('Number of erosion and dilation cycles: %s'%(self.slider_segm.value()))
+        ##
         grid.addWidget(txt_segm, 2, 1, Qt.AlignLeft)
         grid.addWidget(self.fig_segm, 1, 1)
 
-        txt_findgrains_title = QLabel('Identified grains')
+        txt_findgrains_title = QLabel('Identified %s'%(self.typestr))
         txt_findgrains_title.setFont(myBold)
         grid.addWidget(txt_findgrains_title, 0, 2, Qt.AlignCenter)
-        self.btn_findgrains = QPushButton("Identify grains (F5)")
+        self.btn_findgrains = QPushButton('Identify %s (F5)'%(self.typestr))
         self.btn_findgrains.clicked.connect(lambda: self.find_grains())
         self.btn_findgrains.setMinimumWidth(objwidth)
         self.btn_findgrains.setMaximumWidth(objwidth)
         grid.addWidget(self.btn_findgrains, 2, 2, Qt.AlignCenter)
-        self.btn_savegrains = QPushButton("Save tile grains to .csv")
+        self.btn_savegrains = QPushButton('Save tile %s to .csv'%(self.typestr))
         self.btn_savegrains.clicked.connect(lambda: self.save_csv())
         self.btn_savegrains.setMinimumWidth(objwidth)
         self.btn_savegrains.setMaximumWidth(objwidth)
@@ -447,12 +492,14 @@ class TileView(QWidget):
         grid.setRowStretch(7, 1)
         
         self.setLayout(grid)
-        self.setWindowTitle('Tile viewer')
+        self.setWindowTitle('Tile viewer -- %s'%(self.typestr))
         self.show()
         
     def set_tile(self, tile, ij):
+    
         self.tile = tile
         self.tile_ij = ij
+        
         self.update_cntr(self.slider_cntr.value())
         self.fig_cntr.plot(self.tile_cntr)
         self.update_segm(self.slider_segm.value())
@@ -468,10 +515,21 @@ class TileView(QWidget):
             self.tile_cntr = copy.deepcopy(equ)
 
     def update_segm(self, value):
-        ret, thresh0 = cv2.threshold(self.tile_cntr, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+
+        tile = self.tile_cntr
+    
+        if self.type == T_TILEVIEW_BUBBLES:  # Erode away grain boundaries
+#            if self.type == T_TILEVIEW_BUBBLES: self.tile = 255 - self.tile # invert image
+            if self.type == T_TILEVIEW_BUBBLES: tile = 255 - tile # invert image
+            kernel = np.ones((5,5),np.uint8)
+            tile = cv2.erode(tile,  kernel, iterations=value)
+            tile = cv2.dilate(tile, kernel, iterations=value)
+    
+        ret, thresh0 = cv2.threshold(tile, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU) # Automatic segmentation
         k = 0
         thresh1bool = (thresh0 < ret+k) 
-        thresh1 = morphology.remove_small_objects(thresh1bool, value) # 100
+        if self.type == T_TILEVIEW_GRAINS:  thresh1 = morphology.remove_small_objects(thresh1bool, value) 
+        if self.type == T_TILEVIEW_BUBBLES: thresh1 = morphology.remove_small_objects(thresh1bool, 300) # Always remove a bit of the small scale structure due to reflections over bubbles.
         thresh1 = np.uint8(np.logical_not(thresh1)*255)
         self.tile_segm = thresh1
 
@@ -514,7 +572,7 @@ class TileView(QWidget):
         
     def save_csv(self, tilex0=0, tiley0=0):
         
-        fname = self.parent.dumppath + '/%i_%i.csv'%(self.tile_ij[0],self.tile_ij[1])
+        fname = self.parent.dumppath + '/%i_%i_%s.csv'%(self.tile_ij[0], self.tile_ij[1], self.typestr)
         
         propList = {'gnum':'grain_number', \
                     'cntx':'centroid_x', \
@@ -541,28 +599,31 @@ class TileView(QWidget):
             
         output_file.close() 
     
-    def save_imgs(self):
+    def save_img(self):
         
-        fname_base = self.parent.dumppath + '/%i_%i'%(self.tile_ij[0],self.tile_ij[1])
-        
-        fname_raw = fname_base + '_raw.png'
-        fname_prc = fname_base + '_prc.png'
+        fname_base = self.parent.dumppath + '/%i_%i_%s'%(self.tile_ij[0], self.tile_ij[1], self.typestr)
+        fname = fname_base + '.png'
         
         fig = plt.figure(dpi=150)
         fig.tight_layout()
-
         ax = fig.gca()
-        ax.imshow(self.tile_cntr, 'Greys_r')
-        plt.savefig(fname_raw)
-        ax.clear()
-
         ax.imshow(self.tile_lbld)
         plot_ellipses(ax,self.cent,self.orie/self.rad2deg,self.maax,self.miax, cmid='w', cma='0.4', cmi='0.8') 
-        plt.savefig(fname_prc)
-        ax.clear()
-        
+        plt.savefig(fname)
         plt.close(fig)
-    
+        
+    def save_img_raw(self):
+        
+        fname_base = self.parent.dumppath + '/%i_%i'%(self.tile_ij[0], self.tile_ij[1])
+        fname = fname_base + '_raw.png'
+        
+        fig = plt.figure(dpi=150)
+        fig.tight_layout()
+        ax = fig.gca()
+        ax.imshow(self.tile_cntr, 'Greys_r')
+        plt.savefig(fname)
+        plt.close(fig)
+        
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_F5:
             self.find_grains()
